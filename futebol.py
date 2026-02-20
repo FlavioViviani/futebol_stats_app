@@ -34,135 +34,142 @@ st.title("⚽ Estatísticas do Futebol Semanal")
 st.write("Acompanhe o desempenho, artilharia e títulos.")
 
 # ==============================================================================
-#                               BARRA LATERAL
+#                               BARRA LATERAL (ÁREA RESTRITA)
 # ==============================================================================
-st.sidebar.header("📝 Nova Rodada")
 
-# --- 3. ÁREA DE CADASTRO ---
-with st.sidebar.form("form_rodada"):
-    data_jogo = st.date_input("Data do Jogo", date.today())
-    
-    st.subheader("Placar Final (Pontos)")
-    pts_azul = st.number_input("Pontos Azul", min_value=0, step=1)
-    pts_vermelho = st.number_input("Pontos Vermelho", min_value=0, step=1)
-    pts_preto = st.number_input("Pontos Preto", min_value=0, step=1)
-    
-    campeao = st.selectbox("Time Campeão da Rodada", ["Azul", "Vermelho", "Preto", "Empate/Nenhum"])
-    
-    st.markdown("---")
-    st.subheader("Desempenho Individual")
-    st.caption("Adicione os dados no formato: Nome, Time, Gols. (Um por linha)")
-    
-    dados_brutos = st.text_area("Dados dos Jogadores (Ex: João, Azul, 2)")
-    
-    enviar = st.form_submit_button("Salvar Rodada")
+# Cria a variável de memória para saber se o admin está logado
+if 'autenticado' not in st.session_state:
+    st.session_state['autenticado'] = False
 
-# Lógica de Salvar Nova Rodada
-if enviar and dados_brutos:
-    conn = obter_conexao()
-    c = conn.cursor()
-    
-    # 1. Salvar a partida (Postgres usa %s e RETURNING id para pegar o ID gerado)
-    c.execute("INSERT INTO partidas (data, campeao, pontos_azul, pontos_vermelho, pontos_preto) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-              (data_jogo, campeao, pts_azul, pts_vermelho, pts_preto))
-    partida_id = c.fetchone()[0] 
-    
-    # 2. Processar e salvar os jogadores
-    linhas = dados_brutos.split('\n')
-    for linha in linhas:
-        if ',' in linha:
-            partes = [p.strip() for p in linha.split(',')]
-            if len(partes) >= 3:
-                nome = partes[0]
-                time = partes[1]
-                gols = int(partes[2])
-                c.execute("INSERT INTO stats_jogadores (partida_id, jogador, time, gols) VALUES (%s, %s, %s, %s)",
-                          (partida_id, nome, time, gols))
-    
-    conn.commit()
-    conn.close()
-    st.success("Dados salvos com sucesso! Atualize a página.")
-    st.rerun()
+st.sidebar.header("🔐 Acesso Administrativo")
 
-# --- 4. ÁREA DE EDIÇÃO/CORREÇÃO ---
-st.sidebar.markdown("---")
-st.sidebar.header("✏️ Corrigir Estatísticas")
-st.sidebar.caption("Selecione uma rodada para editar gols ou nomes.")
+# SE NÃO ESTIVER AUTENTICADO: Mostra apenas o campo de senha
+if not st.session_state['autenticado']:
+    senha_digitada = st.sidebar.text_input("Digite a senha para editar", type="password")
+    if st.sidebar.button("Entrar"):
+        if senha_digitada == st.secrets["SENHA_ADMIN"]:
+            st.session_state['autenticado'] = True
+            st.rerun()
+        else:
+            st.sidebar.error("Senha incorreta!")
 
-conn_edit = obter_conexao()
-df_partidas_edit = pd.read_sql_query("SELECT id, data, campeao FROM partidas ORDER BY data DESC", conn_edit)
-conn_edit.close()
-
-if not df_partidas_edit.empty:
-    # Dropdown para escolher a partida
-    opcoes_edit = df_partidas_edit.apply(lambda x: f"ID: {x['id']} | {x['data']} | {x['campeao']}", axis=1)
-    escolha_edit = st.sidebar.selectbox("Selecione a Partida para Editar", options=opcoes_edit.values)
-    
-    if escolha_edit:
-        id_partida_edit = int(escolha_edit.split("|")[0].replace("ID:", "").strip())
-
-        # Carregar jogadores dessa partida
-        conn_edit = obter_conexao()
-        query_jogadores = "SELECT jogador, time, gols FROM stats_jogadores WHERE partida_id = %s"
-        df_jogadores_edit = pd.read_sql_query(query_jogadores, conn_edit, params=(id_partida_edit,))
-        conn_edit.close()
-
-        # Editor de Dados
-        st.sidebar.write("Faça as alterações na tabela abaixo:")
-        df_editado = st.sidebar.data_editor(
-            df_jogadores_edit, 
-            num_rows="dynamic",
-            hide_index=True,
-            key="editor_dados"
-        )
-
-        if st.sidebar.button("SALVAR CORREÇÃO"):
-            conn_save = obter_conexao()
-            c_save = conn_save.cursor()
-            try:
-                # 1. Apaga os dados antigos dos jogadores DESSA partida
-                c_save.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_partida_edit,))
-                
-                # 2. Insere os novos dados da tabela editada
-                for index, row in df_editado.iterrows():
-                    if row['jogador'] and row['time']:
-                        c_save.execute(
-                            "INSERT INTO stats_jogadores (partida_id, jogador, time, gols) VALUES (%s, %s, %s, %s)",
-                            (id_partida_edit, row['jogador'], row['time'], row['gols'])
-                        )
-                
-                conn_save.commit()
-                st.sidebar.success("Correção realizada!")
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"Erro ao salvar: {e}")
-            finally:
-                conn_save.close()
-
-# --- 5. ZONA DE PERIGO (EXCLUSÃO) ---
-st.sidebar.markdown("---")
-st.sidebar.header("⚠️ Zona de Perigo")
-
-conn_del = obter_conexao()
-df_del = pd.read_sql_query("SELECT id, data, campeao FROM partidas", conn_del)
-conn_del.close()
-
-if not df_del.empty:
-    opcoes_del = df_del.apply(lambda x: f"ID: {x['id']} | Data: {x['data']} | Vencedor: {x['campeao']}", axis=1)
-    escolha_del = st.sidebar.selectbox("Selecionar Rodada para Excluir", options=opcoes_del.values)
-    
-    if st.sidebar.button("EXCLUIR RODADA SELECIONADA"):
-        id_para_apagar = int(escolha_del.split("|")[0].replace("ID:", "").strip())
-        
-        conn_del = obter_conexao()
-        c_del = conn_del.cursor()
-        c_del.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_para_apagar,))
-        c_del.execute("DELETE FROM partidas WHERE id = %s", (id_para_apagar,))
-        conn_del.commit()
-        conn_del.close()
-        st.success("Rodada apagada!")
+# SE ESTIVER AUTENTICADO: Mostra todos os formulários e opções
+else:
+    if st.sidebar.button("Sair / Bloquear"):
+        st.session_state['autenticado'] = False
         st.rerun()
 
+    st.sidebar.markdown("---")
+    st.sidebar.header("📝 Nova Rodada")
+
+    # --- 3. ÁREA DE CADASTRO ---
+    with st.sidebar.form("form_rodada"):
+        data_jogo = st.date_input("Data do Jogo", date.today())
+        
+        st.subheader("Placar Final (Pontos)")
+        pts_azul = st.number_input("Pontos Azul", min_value=0, step=1)
+        pts_vermelho = st.number_input("Pontos Vermelho", min_value=0, step=1)
+        pts_preto = st.number_input("Pontos Preto", min_value=0, step=1)
+        
+        campeao = st.selectbox("Time Campeão da Rodada", ["Azul", "Vermelho", "Preto", "Empate/Nenhum"])
+        
+        st.markdown("---")
+        st.subheader("Desempenho Individual")
+        st.caption("Adicione os dados no formato: Nome, Time, Gols. (Um por linha)")
+        
+        dados_brutos = st.text_area("Dados dos Jogadores (Ex: João, Azul, 2)")
+        
+        enviar = st.form_submit_button("Salvar Rodada")
+
+    # Lógica de Salvar Nova Rodada
+    if enviar and dados_brutos:
+        conn = obter_conexao()
+        c = conn.cursor()
+        c.execute("INSERT INTO partidas (data, campeao, pontos_azul, pontos_vermelho, pontos_preto) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                  (data_jogo, campeao, pts_azul, pts_vermelho, pts_preto))
+        partida_id = c.fetchone()[0] 
+        linhas = dados_brutos.split('\n')
+        for linha in linhas:
+            if ',' in linha:
+                partes = [p.strip() for p in linha.split(',')]
+                if len(partes) >= 3:
+                    nome = partes[0]
+                    time = partes[1]
+                    gols = int(partes[2])
+                    c.execute("INSERT INTO stats_jogadores (partida_id, jogador, time, gols) VALUES (%s, %s, %s, %s)",
+                              (partida_id, nome, time, gols))
+        conn.commit()
+        conn.close()
+        st.sidebar.success("Dados salvos com sucesso!")
+        st.rerun()
+
+    # --- 4. ÁREA DE EDIÇÃO/CORREÇÃO ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("✏️ Corrigir Estatísticas")
+    conn_edit = obter_conexao()
+    df_partidas_edit = pd.read_sql_query("SELECT id, data, campeao FROM partidas ORDER BY data DESC", conn_edit)
+    conn_edit.close()
+
+    if not df_partidas_edit.empty:
+        opcoes_edit = df_partidas_edit.apply(lambda x: f"ID: {x['id']} | {x['data']} | {x['campeao']}", axis=1)
+        escolha_edit = st.sidebar.selectbox("Selecione a Partida para Editar", options=opcoes_edit.values)
+        
+        if escolha_edit:
+            id_partida_edit = int(escolha_edit.split("|")[0].replace("ID:", "").strip())
+            conn_edit = obter_conexao()
+            query_jogadores = "SELECT jogador, time, gols FROM stats_jogadores WHERE partida_id = %s"
+            df_jogadores_edit = pd.read_sql_query(query_jogadores, conn_edit, params=(id_partida_edit,))
+            conn_edit.close()
+
+            st.sidebar.write("Faça as alterações na tabela abaixo:")
+            df_editado = st.sidebar.data_editor(
+                df_jogadores_edit, 
+                num_rows="dynamic",
+                hide_index=True,
+                key="editor_dados"
+            )
+
+            if st.sidebar.button("SALVAR CORREÇÃO"):
+                conn_save = obter_conexao()
+                c_save = conn_save.cursor()
+                try:
+                    c_save.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_partida_edit,))
+                    for index, row in df_editado.iterrows():
+                        if row['jogador'] and row['time']:
+                            c_save.execute(
+                                "INSERT INTO stats_jogadores (partida_id, jogador, time, gols) VALUES (%s, %s, %s, %s)",
+                                (id_partida_edit, row['jogador'], row['time'], row['gols'])
+                            )
+                    conn_save.commit()
+                    st.sidebar.success("Correção realizada!")
+                    st.rerun()
+                except Exception as e:
+                    st.sidebar.error(f"Erro ao salvar: {e}")
+                finally:
+                    conn_save.close()
+
+    # --- 5. ZONA DE PERIGO (EXCLUSÃO) ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("⚠️ Zona de Perigo")
+    conn_del = obter_conexao()
+    df_del = pd.read_sql_query("SELECT id, data, campeao FROM partidas", conn_del)
+    conn_del.close()
+
+    if not df_del.empty:
+        opcoes_del = df_del.apply(lambda x: f"ID: {x['id']} | Data: {x['data']} | Vencedor: {x['campeao']}", axis=1)
+        escolha_del = st.sidebar.selectbox("Selecionar Rodada para Excluir", options=opcoes_del.values)
+        
+        if st.sidebar.button("EXCLUIR RODADA SELECIONADA"):
+            id_para_apagar = int(escolha_del.split("|")[0].replace("ID:", "").strip())
+            conn_del = obter_conexao()
+            c_del = conn_del.cursor()
+            c_del.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_para_apagar,))
+            c_del.execute("DELETE FROM partidas WHERE id = %s", (id_para_apagar,))
+            conn_del.commit()
+            conn_del.close()
+            st.sidebar.success("Rodada apagada!")
+            st.rerun()
+            
 # ==============================================================================
 #                               DASHBOARD PRINCIPAL
 # ==============================================================================
