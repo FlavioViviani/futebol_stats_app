@@ -4,7 +4,6 @@ import psycopg2
 from datetime import date
 
 # --- FUNÇÃO DE CONEXÃO AO NEON ---
-# O Streamlit vai ler a URL do seu banco de dados a partir do secrets.toml
 def obter_conexao():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
 
@@ -13,37 +12,37 @@ def init_db():
     conn = obter_conexao()
     c = conn.cursor()
     
-    # Tabela de Partidas (No Postgres usamos SERIAL em vez de AUTOINCREMENT)
     c.execute('''CREATE TABLE IF NOT EXISTS partidas
                  (id SERIAL PRIMARY KEY, data DATE, campeao VARCHAR(50), 
                  pontos_azul INTEGER, pontos_vermelho INTEGER, pontos_preto INTEGER)''')
     
-    # Tabela de Jogadores na Partida
+    # Criamos a tabela já com a nova coluna, caso seja um banco do zero
     c.execute('''CREATE TABLE IF NOT EXISTS stats_jogadores
-                 (partida_id INTEGER, jogador VARCHAR(100), time VARCHAR(50), gols INTEGER,
+                 (partida_id INTEGER, jogador VARCHAR(100), time VARCHAR(50), gols INTEGER, assistencias INTEGER DEFAULT 0,
                  FOREIGN KEY(partida_id) REFERENCES partidas(id))''')
+                 
+    # O Pulo do gato: Atualiza a tabela existente no Neon adicionando a coluna de assistências sem apagar nada
+    c.execute("ALTER TABLE stats_jogadores ADD COLUMN IF NOT EXISTS assistencias INTEGER DEFAULT 0")
+    
     conn.commit()
     conn.close()
 
-# Chama a função ao iniciar
 init_db()
 
 # --- 2. TÍTULO E LAYOUT ---
 st.set_page_config(page_title="Stats Futebol", page_icon="⚽", layout="wide")
 st.title("⚽ Estatísticas do Futebol Semanal")
-st.write("Acompanhe o desempenho, artilharia e títulos.")
+st.write("Acompanhe o desempenho, artilharia, assistências e títulos.")
 
 # ==============================================================================
 #                               BARRA LATERAL (ÁREA RESTRITA)
 # ==============================================================================
 
-# Cria a variável de memória para saber se o admin está logado
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
 
 st.sidebar.header("🔐 Acesso Administrativo")
 
-# SE NÃO ESTIVER AUTENTICADO: Mostra apenas o campo de senha
 if not st.session_state['autenticado']:
     senha_digitada = st.sidebar.text_input("Digite a senha para editar", type="password")
     if st.sidebar.button("Entrar"):
@@ -53,7 +52,6 @@ if not st.session_state['autenticado']:
         else:
             st.sidebar.error("Senha incorreta!")
 
-# SE ESTIVER AUTENTICADO: Mostra todos os formulários e opções
 else:
     if st.sidebar.button("Sair / Bloquear"):
         st.session_state['autenticado'] = False
@@ -75,19 +73,19 @@ else:
         
         st.markdown("---")
         st.subheader("Desempenho Individual")
-        st.caption("Adicione os dados no formato: Nome, Time, Gols. (Um por linha)")
+        st.caption("Formato: Nome, Time, Gols, Assistências. (Um por linha)") # Texto atualizado
         
-        dados_brutos = st.text_area("Dados dos Jogadores (Ex: João, Azul, 2)")
+        dados_brutos = st.text_area("Dados dos Jogadores (Ex: João, Azul, 2, 1)") # Exemplo atualizado
         
         enviar = st.form_submit_button("Salvar Rodada")
 
-    # Lógica de Salvar Nova Rodada
     if enviar and dados_brutos:
         conn = obter_conexao()
         c = conn.cursor()
         c.execute("INSERT INTO partidas (data, campeao, pontos_azul, pontos_vermelho, pontos_preto) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                   (data_jogo, campeao, pts_azul, pts_vermelho, pts_preto))
         partida_id = c.fetchone()[0] 
+        
         linhas = dados_brutos.split('\n')
         for linha in linhas:
             if ',' in linha:
@@ -96,8 +94,11 @@ else:
                     nome = partes[0]
                     time = partes[1]
                     gols = int(partes[2])
-                    c.execute("INSERT INTO stats_jogadores (partida_id, jogador, time, gols) VALUES (%s, %s, %s, %s)",
-                              (partida_id, nome, time, gols))
+                    # Se esquecer a assistência, assume 0
+                    assistencias = int(partes[3]) if len(partes) >= 4 else 0 
+                    
+                    c.execute("INSERT INTO stats_jogadores (partida_id, jogador, time, gols, assistencias) VALUES (%s, %s, %s, %s, %s)",
+                              (partida_id, nome, time, gols, assistencias))
         conn.commit()
         conn.close()
         st.sidebar.success("Dados salvos com sucesso!")
@@ -117,7 +118,8 @@ else:
         if escolha_edit:
             id_partida_edit = int(escolha_edit.split("|")[0].replace("ID:", "").strip())
             conn_edit = obter_conexao()
-            query_jogadores = "SELECT jogador, time, gols FROM stats_jogadores WHERE partida_id = %s"
+            # Adicionado a coluna de assistências na busca
+            query_jogadores = "SELECT jogador, time, gols, assistencias FROM stats_jogadores WHERE partida_id = %s"
             df_jogadores_edit = pd.read_sql_query(query_jogadores, conn_edit, params=(id_partida_edit,))
             conn_edit.close()
 
@@ -136,9 +138,13 @@ else:
                     c_save.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_partida_edit,))
                     for index, row in df_editado.iterrows():
                         if row['jogador'] and row['time']:
+                            # Usamos row.get para garantir que não dê erro se a coluna vier vazia
+                            assist = row.get('assistencias', 0)
+                            if pd.isna(assist): assist = 0
+                                
                             c_save.execute(
-                                "INSERT INTO stats_jogadores (partida_id, jogador, time, gols) VALUES (%s, %s, %s, %s)",
-                                (id_partida_edit, row['jogador'], row['time'], row['gols'])
+                                "INSERT INTO stats_jogadores (partida_id, jogador, time, gols, assistencias) VALUES (%s, %s, %s, %s, %s)",
+                                (id_partida_edit, row['jogador'], row['time'], row['gols'], assist)
                             )
                     conn_save.commit()
                     st.sidebar.success("Correção realizada!")
@@ -169,27 +175,22 @@ else:
             conn_del.close()
             st.sidebar.success("Rodada apagada!")
             st.rerun()
-            
+
 # ==============================================================================
 #                               DASHBOARD PRINCIPAL
 # ==============================================================================
 
 conn = obter_conexao()
-
-# Carregar dados
 df_partidas = pd.read_sql_query("SELECT * FROM partidas", conn)
 df_stats = pd.read_sql_query("SELECT * FROM stats_jogadores", conn)
-
 conn.close()
 
 if not df_stats.empty:
-    # 1. PREPARAÇÃO DOS DADOS
     df_partidas['data'] = pd.to_datetime(df_partidas['data'])
     df_partidas['periodo'] = df_partidas['data'].dt.to_period('M')
 
     df_completo = pd.merge(df_stats, df_partidas, left_on='partida_id', right_on='id')
 
-    # --- 2. FILTRO DE PERÍODO (MÊS) ---
     st.markdown("---")
     col_filtro, col_vazia = st.columns([1, 2])
     
@@ -205,9 +206,9 @@ if not df_stats.empty:
         df_ativo = df_completo[df_completo['periodo'].astype(str) == escolha_periodo].copy()
         titulo_secao = f"Classificação de {escolha_periodo} 📅"
 
-    # --- 3. CÁLCULOS ---
     if not df_ativo.empty:
         ranking_gols = df_ativo.groupby('jogador')['gols'].sum().sort_values(ascending=False).reset_index()
+        ranking_assist = df_ativo.groupby('jogador')['assistencias'].sum().reset_index() # CÁLCULO DE ASSISTÊNCIAS
         
         df_vitorias = df_ativo[df_ativo['time'] == df_ativo['campeao']]
         ranking_titulos = df_vitorias['jogador'].value_counts().reset_index()
@@ -216,22 +217,25 @@ if not df_stats.empty:
         presenca = df_ativo['jogador'].value_counts().reset_index()
         presenca.columns = ['jogador', 'jogos']
 
+        # Juntando todas as tabelas
         tabela_geral = pd.merge(ranking_gols, ranking_titulos, on='jogador', how='outer').fillna(0)
         tabela_geral = pd.merge(tabela_geral, presenca, on='jogador', how='outer').fillna(0)
+        tabela_geral = pd.merge(tabela_geral, ranking_assist, on='jogador', how='outer').fillna(0)
         
         tabela_geral['titulos'] = tabela_geral['titulos'].astype(int)
         tabela_geral['gols'] = tabela_geral['gols'].astype(int)
+        tabela_geral['assistencias'] = tabela_geral['assistencias'].astype(int)
         tabela_geral['jogos'] = tabela_geral['jogos'].astype(int)
         
         tabela_geral['media_gols'] = tabela_geral.apply(
             lambda x: round(x['gols'] / x['jogos'], 2) if x['jogos'] > 0 else 0, axis=1
         )
         
-        tabela_geral = tabela_geral.sort_values(by=['titulos', 'gols', 'jogos'], ascending=[False, False, True])
+        # O desempate agora é: Títulos > Gols > Assistências > Menos Jogos
+        tabela_geral = tabela_geral.sort_values(by=['titulos', 'gols', 'assistencias', 'jogos'], ascending=[False, False, False, True])
     else:
-        tabela_geral = pd.DataFrame(columns=['jogador', 'titulos', 'gols', 'jogos', 'media_gols'])
+        tabela_geral = pd.DataFrame(columns=['jogador', 'titulos', 'gols', 'assistencias', 'jogos', 'media_gols'])
 
-    # --- 4. VISUALIZAÇÃO ---
     st.header(titulo_secao)
     st.dataframe(
         tabela_geral, 
@@ -240,6 +244,7 @@ if not df_stats.empty:
             "jogador": "Atleta",
             "titulos": st.column_config.NumberColumn("🏆 Títulos", format="%d"),
             "gols": st.column_config.NumberColumn("⚽ Gols", format="%d"),
+            "assistencias": st.column_config.NumberColumn("👟 Assistências", format="%d"),
             "jogos": "Jogos",
             "media_gols": "Média"
         },
@@ -252,10 +257,9 @@ if not df_stats.empty:
             st.caption("Artilharia do Período")
             st.bar_chart(ranking_gols.set_index('jogador').head(5))
         with col2:
-            st.caption("Reis do Título no Período")
-            st.bar_chart(ranking_titulos.set_index('jogador').head(5))
+            st.caption("Maiores Garçons (Assistências)") # Gráfico novo substituindo o de títulos ou dividindo espaço
+            st.bar_chart(ranking_assist.set_index('jogador').sort_values(by='assistencias', ascending=False).head(5))
 
-    # --- 5. DETALHES DO JOGADOR ---
     st.markdown("---")
     st.header("👤 Detalhes do Jogador")
 
@@ -265,30 +269,28 @@ if not df_stats.empty:
 
         df_jogador = df_completo[df_completo['jogador'] == jogador_selecionado].copy()
         df_jogador = df_jogador.sort_values(by='data')
-        df_jogador['gols_acumulados'] = df_jogador['gols'].cumsum()
 
-        col_metrics1, col_metrics2, col_metrics3 = st.columns(3)
+        col_metrics1, col_metrics2, col_metrics3, col_metrics4 = st.columns(4)
         total_gols = df_jogador['gols'].sum()
+        total_assistencias = df_jogador['assistencias'].sum()
         total_jogos = len(df_jogador)
         total_vitorias = len(df_jogador[df_jogador['time'] == df_jogador['campeao']])
 
-        col_metrics1.metric("Total de Gols (Carreira)", int(total_gols))
-        col_metrics2.metric("Jogos Disputados", int(total_jogos))
-        col_metrics3.metric("Títulos Conquistados", int(total_vitorias))
-
-        st.subheader(f"Evolução de Gols: {jogador_selecionado}")
-        grafico_evolucao = df_jogador[['data', 'gols_acumulados']].set_index('data')
-        st.line_chart(grafico_evolucao)
+        col_metrics1.metric("Gols (Carreira)", int(total_gols))
+        col_metrics2.metric("Assistências", int(total_assistencias))
+        col_metrics3.metric("Jogos Disputados", int(total_jogos))
+        col_metrics4.metric("Títulos", int(total_vitorias))
         
         with st.expander(f"Ver histórico de partidas de {jogador_selecionado}"):
             st.dataframe(
-                df_jogador[['data', 'time', 'gols', 'campeao']].sort_values(by='data', ascending=False),
+                df_jogador[['data', 'time', 'gols', 'assistencias', 'campeao']].sort_values(by='data', ascending=False),
                 use_container_width=True,
                 column_config={
                     "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                     "time": "Time que Jogou",
-                    "gols": "Gols na Partida",
-                    "campeao": "Time Vencedor"
+                    "gols": "Gols",
+                    "assistencias": "Assist.",
+                    "campeao": "Vencedor"
                 }
             )
 
@@ -299,4 +301,4 @@ if not df_stats.empty:
     st.dataframe(df_display_partidas[['id', 'data', 'campeao', 'pontos_azul', 'pontos_vermelho', 'pontos_preto']].sort_values(by='id', ascending=False), use_container_width=True)
 
 else:
-    st.info("Ainda não há dados cadastrados. Use a barra lateral para adicionar a primeira rodada.")
+    st.info("Ainda não há dados cadastrados.")
