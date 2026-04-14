@@ -344,15 +344,32 @@ if not df_stats.empty:
         col_metrics4.metric("Títulos", int(total_vitorias))
         
         with st.expander(f"Ver histórico de partidas de {jogador_selecionado}"):
+            # 1. Preparamos uma cópia do histórico apenas com as colunas que importam
+            df_historico = df_jogador[['data', 'time', 'gols', 'assistencias', 'campeao']].sort_values(by='data', ascending=False).copy()
+            
+            # 2. Criamos uma coluna de destaque com Troféu
+            df_historico['status'] = df_historico.apply(
+                lambda x: '🏆 Campeão' if x['time'] == x['campeao'] else '➖', axis=1
+            )
+            
+            # 3. Função mágica que pinta a linha
+            def destacar_campeao(row):
+                # Se o time dele for o campeão, pinta a linha de verde suave (funciona no tema claro e escuro)
+                if row['time'] == row['campeao']:
+                    return ['background-color: rgba(46, 204, 113, 0.2)'] * len(row)
+                return [''] * len(row)
+
+            # 4. Exibimos a tabela aplicando a pintura
             st.dataframe(
-                df_jogador[['data', 'time', 'gols', 'assistencias', 'campeao']].sort_values(by='data', ascending=False),
+                df_historico.style.apply(destacar_campeao, axis=1),
                 use_container_width=True,
                 column_config={
                     "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                     "time": "Time que Jogou",
                     "gols": "Gols",
                     "assistencias": "Assist.",
-                    "campeao": "Vencedor"
+                    "campeao": "Vencedor da Rodada",
+                    "status": "Resultado" # A nossa nova coluna com o troféu!
                 }
             )
 
