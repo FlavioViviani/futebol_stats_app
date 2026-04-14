@@ -16,12 +16,11 @@ def init_db():
                  (id SERIAL PRIMARY KEY, data DATE, campeao VARCHAR(50), 
                  pontos_azul INTEGER, pontos_vermelho INTEGER, pontos_preto INTEGER)''')
     
-    # Criamos a tabela já com a nova coluna, caso seja um banco do zero
     c.execute('''CREATE TABLE IF NOT EXISTS stats_jogadores
                  (partida_id INTEGER, jogador VARCHAR(100), time VARCHAR(50), gols INTEGER, assistencias INTEGER DEFAULT 0,
                  FOREIGN KEY(partida_id) REFERENCES partidas(id))''')
                  
-    # O Pulo do gato: Atualiza a tabela existente no Neon adicionando a coluna de assistências sem apagar nada
+    # Garante que a coluna de assistências exista mesmo em bancos antigos
     c.execute("ALTER TABLE stats_jogadores ADD COLUMN IF NOT EXISTS assistencias INTEGER DEFAULT 0")
     
     conn.commit()
@@ -29,7 +28,7 @@ def init_db():
 
 init_db()
 
-# --- 2. TÍTULO E LAYOUT ---
+# --- 2. TÍTULO E LAYOUT PRINCIPAL ---
 st.set_page_config(page_title="Stats Futebol", page_icon="⚽", layout="wide")
 st.title("⚽ Estatísticas do Futebol Semanal")
 st.write("Acompanhe o desempenho, artilharia, assistências e títulos.")
@@ -38,11 +37,13 @@ st.write("Acompanhe o desempenho, artilharia, assistências e títulos.")
 #                               BARRA LATERAL (ÁREA RESTRITA)
 # ==============================================================================
 
+# Cria a variável de sessão para o login se ela não existir
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
 
 st.sidebar.header("🔐 Acesso Administrativo")
 
+# --- SE NÃO ESTIVER LOGADO ---
 if not st.session_state['autenticado']:
     senha_digitada = st.sidebar.text_input("Digite a senha para editar", type="password")
     if st.sidebar.button("Entrar"):
@@ -52,129 +53,190 @@ if not st.session_state['autenticado']:
         else:
             st.sidebar.error("Senha incorreta!")
 
+# --- SE ESTIVER LOGADO ---
 else:
     if st.sidebar.button("Sair / Bloquear"):
         st.session_state['autenticado'] = False
         st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.header("📝 Nova Rodada")
+    
+    # Menu de navegação da barra lateral
+    opcao_admin = st.sidebar.radio("O que deseja fazer?", ["Nova Rodada", "Ajuste por Atleta", "Editar Rodada Completa", "Excluir Rodada"])
 
-    # --- 3. ÁREA DE CADASTRO ---
-    with st.sidebar.form("form_rodada"):
-        data_jogo = st.date_input("Data do Jogo", date.today())
-        
-        st.subheader("Placar Final (Pontos)")
-        pts_azul = st.number_input("Pontos Azul", min_value=0, step=1)
-        pts_vermelho = st.number_input("Pontos Vermelho", min_value=0, step=1)
-        pts_preto = st.number_input("Pontos Preto", min_value=0, step=1)
-        
-        campeao = st.selectbox("Time Campeão da Rodada", ["Azul", "Vermelho", "Preto", "Empate/Nenhum"])
-        
-        st.markdown("---")
-        st.subheader("Desempenho Individual")
-        st.caption("Formato: Nome, Time, Gols, Assistências. (Um por linha)") # Texto atualizado
-        
-        dados_brutos = st.text_area("Dados dos Jogadores (Ex: João, Azul, 2, 1)") # Exemplo atualizado
-        
-        enviar = st.form_submit_button("Salvar Rodada")
-
-    if enviar and dados_brutos:
-        conn = obter_conexao()
-        c = conn.cursor()
-        c.execute("INSERT INTO partidas (data, campeao, pontos_azul, pontos_vermelho, pontos_preto) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                  (data_jogo, campeao, pts_azul, pts_vermelho, pts_preto))
-        partida_id = c.fetchone()[0] 
-        
-        linhas = dados_brutos.split('\n')
-        for linha in linhas:
-            if ',' in linha:
-                partes = [p.strip() for p in linha.split(',')]
-                if len(partes) >= 3:
-                    nome = partes[0]
-                    time = partes[1]
-                    gols = int(partes[2])
-                    # Se esquecer a assistência, assume 0
-                    assistencias = int(partes[3]) if len(partes) >= 4 else 0 
-                    
-                    c.execute("INSERT INTO stats_jogadores (partida_id, jogador, time, gols, assistencias) VALUES (%s, %s, %s, %s, %s)",
-                              (partida_id, nome, time, gols, assistencias))
-        conn.commit()
-        conn.close()
-        st.sidebar.success("Dados salvos com sucesso!")
-        st.rerun()
-
-    # --- 4. ÁREA DE EDIÇÃO/CORREÇÃO ---
     st.sidebar.markdown("---")
-    st.sidebar.header("✏️ Corrigir Estatísticas")
-    conn_edit = obter_conexao()
-    df_partidas_edit = pd.read_sql_query("SELECT id, data, campeao FROM partidas ORDER BY data DESC", conn_edit)
-    conn_edit.close()
 
-    if not df_partidas_edit.empty:
-        opcoes_edit = df_partidas_edit.apply(lambda x: f"ID: {x['id']} | {x['data']} | {x['campeao']}", axis=1)
-        escolha_edit = st.sidebar.selectbox("Selecione a Partida para Editar", options=opcoes_edit.values)
-        
-        if escolha_edit:
-            id_partida_edit = int(escolha_edit.split("|")[0].replace("ID:", "").strip())
-            conn_edit = obter_conexao()
-            # Adicionado a coluna de assistências na busca
-            query_jogadores = "SELECT jogador, time, gols, assistencias FROM stats_jogadores WHERE partida_id = %s"
-            df_jogadores_edit = pd.read_sql_query(query_jogadores, conn_edit, params=(id_partida_edit,))
-            conn_edit.close()
+    # === OPÇÃO 1: NOVA RODADA ===
+    if opcao_admin == "Nova Rodada":
+        st.sidebar.subheader("📝 Nova Rodada")
+        with st.sidebar.form("form_rodada"):
+            data_jogo = st.date_input("Data do Jogo", date.today())
+            
+            st.write("Placar Final (Pontos)")
+            pts_azul = st.number_input("Pontos Azul", min_value=0, step=1)
+            pts_vermelho = st.number_input("Pontos Vermelho", min_value=0, step=1)
+            pts_preto = st.number_input("Pontos Preto", min_value=0, step=1)
+            
+            campeao = st.selectbox("Time Campeão", ["Azul", "Vermelho", "Preto", "Empate/Nenhum"])
+            
+            st.write("Desempenho Individual")
+            st.caption("Formato: Nome, Time, Gols, Assistências. (Um por linha)")
+            dados_brutos = st.text_area("Dados dos Jogadores (Ex: João, Azul, 2, 1)")
+            
+            enviar = st.form_submit_button("Salvar Rodada")
 
-            st.sidebar.write("Faça as alterações na tabela abaixo:")
-            df_editado = st.sidebar.data_editor(
-                df_jogadores_edit, 
-                num_rows="dynamic",
-                hide_index=True,
-                key="editor_dados"
-            )
-
-            if st.sidebar.button("SALVAR CORREÇÃO"):
-                conn_save = obter_conexao()
-                c_save = conn_save.cursor()
-                try:
-                    c_save.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_partida_edit,))
-                    for index, row in df_editado.iterrows():
-                        if row['jogador'] and row['time']:
-                            # Usamos row.get para garantir que não dê erro se a coluna vier vazia
-                            assist = row.get('assistencias', 0)
-                            if pd.isna(assist): assist = 0
-                                
-                            c_save.execute(
-                                "INSERT INTO stats_jogadores (partida_id, jogador, time, gols, assistencias) VALUES (%s, %s, %s, %s, %s)",
-                                (id_partida_edit, row['jogador'], row['time'], row['gols'], assist)
-                            )
-                    conn_save.commit()
-                    st.sidebar.success("Correção realizada!")
-                    st.rerun()
-                except Exception as e:
-                    st.sidebar.error(f"Erro ao salvar: {e}")
-                finally:
-                    conn_save.close()
-
-    # --- 5. ZONA DE PERIGO (EXCLUSÃO) ---
-    st.sidebar.markdown("---")
-    st.sidebar.header("⚠️ Zona de Perigo")
-    conn_del = obter_conexao()
-    df_del = pd.read_sql_query("SELECT id, data, campeao FROM partidas", conn_del)
-    conn_del.close()
-
-    if not df_del.empty:
-        opcoes_del = df_del.apply(lambda x: f"ID: {x['id']} | Data: {x['data']} | Vencedor: {x['campeao']}", axis=1)
-        escolha_del = st.sidebar.selectbox("Selecionar Rodada para Excluir", options=opcoes_del.values)
-        
-        if st.sidebar.button("EXCLUIR RODADA SELECIONADA"):
-            id_para_apagar = int(escolha_del.split("|")[0].replace("ID:", "").strip())
-            conn_del = obter_conexao()
-            c_del = conn_del.cursor()
-            c_del.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_para_apagar,))
-            c_del.execute("DELETE FROM partidas WHERE id = %s", (id_para_apagar,))
-            conn_del.commit()
-            conn_del.close()
-            st.sidebar.success("Rodada apagada!")
+        if enviar and dados_brutos:
+            conn = obter_conexao()
+            c = conn.cursor()
+            c.execute("INSERT INTO partidas (data, campeao, pontos_azul, pontos_vermelho, pontos_preto) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                      (data_jogo, campeao, pts_azul, pts_vermelho, pts_preto))
+            partida_id = c.fetchone()[0] 
+            
+            linhas = dados_brutos.split('\n')
+            for linha in linhas:
+                if ',' in linha:
+                    partes = [p.strip() for p in linha.split(',')]
+                    if len(partes) >= 3:
+                        nome = partes[0]
+                        time = partes[1]
+                        gols = int(partes[2])
+                        assist = int(partes[3]) if len(partes) >= 4 else 0 
+                        
+                        c.execute("INSERT INTO stats_jogadores (partida_id, jogador, time, gols, assistencias) VALUES (%s, %s, %s, %s, %s)",
+                                  (partida_id, nome, time, gols, assist))
+            conn.commit()
+            conn.close()
+            st.sidebar.success("Rodada salva com sucesso!")
             st.rerun()
+
+    # === OPÇÃO 2: AJUSTE POR ATLETA (CIRÚRGICO) ===
+    elif opcao_admin == "Ajuste por Atleta":
+        st.sidebar.subheader("🎯 Ajuste Cirúrgico")
+        conn = obter_conexao()
+        jogadores_unicos = pd.read_sql_query("SELECT DISTINCT jogador FROM stats_jogadores ORDER BY jogador", conn)['jogador'].tolist()
+        conn.close()
+
+        if jogadores_unicos:
+            atleta_sel = st.sidebar.selectbox("Selecione o Atleta", jogadores_unicos)
+
+            if atleta_sel:
+                conn = obter_conexao()
+                query = """
+                    SELECT s.partida_id, p.data, s.time, s.gols, s.assistencias
+                    FROM stats_jogadores s
+                    JOIN partidas p ON s.partida_id = p.id
+                    WHERE s.jogador = %s
+                    ORDER BY p.data DESC
+                """
+                df_hist_atleta = pd.read_sql_query(query, conn, params=(atleta_sel,))
+                conn.close()
+
+                st.sidebar.write(f"Editando histórico de: **{atleta_sel}**")
+                st.sidebar.caption("Altere os gols e assistências abaixo:")
+                
+                df_ajustado = st.sidebar.data_editor(
+                    df_hist_atleta,
+                    hide_index=True,
+                    disabled=["partida_id", "data", "time"], # Impede de mexer na data e time por engano
+                    key="editor_individual"
+                )
+
+                if st.sidebar.button("Confirmar Alteração"):
+                    conn = obter_conexao()
+                    c = conn.cursor()
+                    try:
+                        for index, row in df_ajustado.iterrows():
+                            # Usa get e trata valores nulos/NaN para evitar erros
+                            gols_edit = int(row.get('gols', 0)) if not pd.isna(row.get('gols')) else 0
+                            assist_edit = int(row.get('assistencias', 0)) if not pd.isna(row.get('assistencias')) else 0
+                            
+                            c.execute("""
+                                UPDATE stats_jogadores 
+                                SET gols = %s, assistencias = %s 
+                                WHERE partida_id = %s AND jogador = %s
+                            """, (gols_edit, assist_edit, int(row['partida_id']), atleta_sel))
+                        
+                        conn.commit()
+                        st.sidebar.success(f"Dados atualizados!")
+                        st.rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"Erro: {e}")
+                    finally:
+                        conn.close()
+        else:
+            st.sidebar.info("Nenhum jogador cadastrado ainda.")
+
+    # === OPÇÃO 3: EDITAR RODADA COMPLETA ===
+    elif opcao_admin == "Editar Rodada Completa":
+        st.sidebar.subheader("✏️ Corrigir Rodada")
+        conn_edit = obter_conexao()
+        df_partidas_edit = pd.read_sql_query("SELECT id, data, campeao FROM partidas ORDER BY data DESC", conn_edit)
+        conn_edit.close()
+
+        if not df_partidas_edit.empty:
+            opcoes_edit = df_partidas_edit.apply(lambda x: f"ID: {x['id']} | {x['data']} | {x['campeao']}", axis=1)
+            escolha_edit = st.sidebar.selectbox("Selecione a Partida", options=opcoes_edit.values)
+            
+            if escolha_edit:
+                id_partida_edit = int(escolha_edit.split("|")[0].replace("ID:", "").strip())
+                conn_edit = obter_conexao()
+                query_jogadores = "SELECT jogador, time, gols, assistencias FROM stats_jogadores WHERE partida_id = %s"
+                df_jogadores_edit = pd.read_sql_query(query_jogadores, conn_edit, params=(id_partida_edit,))
+                conn_edit.close()
+
+                st.sidebar.write("Faça as alterações na tabela abaixo:")
+                df_editado = st.sidebar.data_editor(
+                    df_jogadores_edit, 
+                    num_rows="dynamic",
+                    hide_index=True,
+                    key="editor_dados_rodada"
+                )
+
+                if st.sidebar.button("Salvar Correção"):
+                    conn_save = obter_conexao()
+                    c_save = conn_save.cursor()
+                    try:
+                        # Apaga o antigo e insere o novo para garantir integridade caso adicione nova linha
+                        c_save.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_partida_edit,))
+                        for index, row in df_editado.iterrows():
+                            if row['jogador'] and row['time']:
+                                assist = int(row.get('assistencias', 0)) if not pd.isna(row.get('assistencias')) else 0
+                                gols = int(row.get('gols', 0)) if not pd.isna(row.get('gols')) else 0
+                                
+                                c_save.execute(
+                                    "INSERT INTO stats_jogadores (partida_id, jogador, time, gols, assistencias) VALUES (%s, %s, %s, %s, %s)",
+                                    (id_partida_edit, row['jogador'], row['time'], gols, assist)
+                                )
+                        conn_save.commit()
+                        st.sidebar.success("Rodada atualizada!")
+                        st.rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"Erro ao salvar: {e}")
+                    finally:
+                        conn_save.close()
+
+    # === OPÇÃO 4: EXCLUIR RODADA ===
+    elif opcao_admin == "Excluir Rodada":
+        st.sidebar.subheader("⚠️ Excluir Rodada")
+        conn_del = obter_conexao()
+        df_del = pd.read_sql_query("SELECT id, data, campeao FROM partidas ORDER BY data DESC", conn_del)
+        conn_del.close()
+
+        if not df_del.empty:
+            opcoes_del = df_del.apply(lambda x: f"ID: {x['id']} | Data: {x['data']} | Vencedor: {x['campeao']}", axis=1)
+            escolha_del = st.sidebar.selectbox("Selecionar Partida", options=opcoes_del.values)
+            
+            if st.sidebar.button("Excluir Definitivamente"):
+                id_para_apagar = int(escolha_del.split("|")[0].replace("ID:", "").strip())
+                conn_del = obter_conexao()
+                c_del = conn_del.cursor()
+                c_del.execute("DELETE FROM stats_jogadores WHERE partida_id = %s", (id_para_apagar,))
+                c_del.execute("DELETE FROM partidas WHERE id = %s", (id_para_apagar,))
+                conn_del.commit()
+                conn_del.close()
+                st.sidebar.success("Partida apagada!")
+                st.rerun()
+
 
 # ==============================================================================
 #                               DASHBOARD PRINCIPAL
@@ -208,7 +270,7 @@ if not df_stats.empty:
 
     if not df_ativo.empty:
         ranking_gols = df_ativo.groupby('jogador')['gols'].sum().sort_values(ascending=False).reset_index()
-        ranking_assist = df_ativo.groupby('jogador')['assistencias'].sum().reset_index() # CÁLCULO DE ASSISTÊNCIAS
+        ranking_assist = df_ativo.groupby('jogador')['assistencias'].sum().reset_index()
         
         df_vitorias = df_ativo[df_ativo['time'] == df_ativo['campeao']]
         ranking_titulos = df_vitorias['jogador'].value_counts().reset_index()
@@ -231,7 +293,7 @@ if not df_stats.empty:
             lambda x: round(x['gols'] / x['jogos'], 2) if x['jogos'] > 0 else 0, axis=1
         )
         
-        # O desempate agora é: Títulos > Gols > Assistências > Menos Jogos
+        # Desempate: Títulos > Gols > Assistências > Menos Jogos
         tabela_geral = tabela_geral.sort_values(by=['titulos', 'gols', 'assistencias', 'jogos'], ascending=[False, False, False, True])
     else:
         tabela_geral = pd.DataFrame(columns=['jogador', 'titulos', 'gols', 'assistencias', 'jogos', 'media_gols'])
@@ -257,7 +319,7 @@ if not df_stats.empty:
             st.caption("Artilharia do Período")
             st.bar_chart(ranking_gols.set_index('jogador').head(5))
         with col2:
-            st.caption("Maiores Garçons (Assistências)") # Gráfico novo substituindo o de títulos ou dividindo espaço
+            st.caption("Maiores Garçons (Assistências)")
             st.bar_chart(ranking_assist.set_index('jogador').sort_values(by='assistencias', ascending=False).head(5))
 
     st.markdown("---")
