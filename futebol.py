@@ -411,6 +411,49 @@ if not df_stats.empty:
                     }
                 )
     
+            # =========================================================
+            # NOVA FUNCIONALIDADE: MELHORES ENTROSAMENTOS (PARCEIROS)
+            # =========================================================
+            st.markdown("---")
+            st.subheader("👥 Melhores Entrosamentos")
+            st.caption(f"Com quem {jogador_selecionado} mais formou equipe.")
+
+            # 1. Pega apenas as partidas e times que o jogador em foco participou
+            partidas_do_jogador = df_jogador[['partida_id', 'time']]
+
+            # 2. Cruza com o banco geral para achar todo mundo que estava lá
+            df_parceiros = pd.merge(df_completo, partidas_do_jogador, on=['partida_id', 'time'])
+
+            # 3. Tira o próprio jogador da lista (para ele não aparecer como parceiro dele mesmo)
+            df_parceiros = df_parceiros[df_parceiros['jogador'] != jogador_selecionado]
+
+            # 4. Conta quantas vezes cada nome aparece
+            contagem_parceiros = df_parceiros['jogador'].value_counts().reset_index()
+            contagem_parceiros.columns = ['Parceiro', 'Jogos Juntos']
+
+            if not contagem_parceiros.empty:
+                # Pega o número máximo de jogos para a barra de progresso calcular a proporção
+                max_jogos = int(contagem_parceiros['Jogos Juntos'].max())
+                
+                # Exibe a tabela elegante com as barras
+                st.dataframe(
+                    contagem_parceiros.head(10), # Mostra o Top 10 de parceiros
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Parceiro": "Nome do Parceiro",
+                        "Jogos Juntos": st.column_config.ProgressColumn(
+                            "Partidas no Mesmo Time",
+                            help="Número de vezes que jogaram juntos",
+                            format="%d jogos",
+                            min_value=0,
+                            max_value=max_jogos
+                        )
+                    }
+                )
+            else:
+                st.info("Nenhuma parceria registrada ainda.")
+    
     st.markdown("---")
     st.header("📜 Histórico Geral de Partidas")
     df_display_partidas = df_partidas.copy()
