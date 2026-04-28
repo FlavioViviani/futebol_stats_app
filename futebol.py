@@ -322,6 +322,7 @@ if not df_stats.empty:
             st.caption("Maiores Garçons (Assistências)")
             st.bar_chart(ranking_assist.set_index('jogador').sort_values(by='assistencias', ascending=False).head(5))
 
+    # --- 5. DETALHES DO JOGADOR ---
     st.markdown("---")
     st.header("👤 Detalhes do Jogador")
 
@@ -344,35 +345,72 @@ if not df_stats.empty:
         col_metrics4.metric("Títulos", int(total_vitorias))
         
         with st.expander(f"Ver histórico de partidas de {jogador_selecionado}"):
-            # 1. Preparamos uma cópia do histórico apenas com as colunas que importam
-            df_historico = df_jogador[['data', 'time', 'gols', 'assistencias', 'campeao']].sort_values(by='data', ascending=False).copy()
+            # 1. Adicionamos o 'partida_id' na busca (ele será usado no filtro dos companheiros)
+            df_historico = df_jogador[['partida_id', 'data', 'time', 'gols', 'assistencias', 'campeao']].sort_values(by='data', ascending=False).copy()
             
-            # 2. Criamos uma coluna de destaque com Troféu
             df_historico['status'] = df_historico.apply(
                 lambda x: '🏆 Campeão' if x['time'] == x['campeao'] else '➖', axis=1
             )
             
-            # 3. Função mágica que pinta a linha
             def destacar_campeao(row):
-                # Se o time dele for o campeão, pinta a linha de verde suave (funciona no tema claro e escuro)
                 if row['time'] == row['campeao']:
                     return ['background-color: rgba(46, 204, 113, 0.2)'] * len(row)
                 return [''] * len(row)
 
-            # 4. Exibimos a tabela aplicando a pintura
             st.dataframe(
                 df_historico.style.apply(destacar_campeao, axis=1),
                 use_container_width=True,
                 column_config={
+                    "partida_id": None, # Mantemos o ID invisível para não poluir a tela
                     "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                     "time": "Time que Jogou",
                     "gols": "Gols",
                     "assistencias": "Assist.",
                     "campeao": "Vencedor da Rodada",
-                    "status": "Resultado" # A nossa nova coluna com o troféu!
+                    "status": "Resultado"
                 }
             )
 
+            # =========================================================
+            # NOVA FUNCIONALIDADE: COMPANHEIROS DE EQUIPE DO DIA
+            # =========================================================
+            st.markdown("---")
+            st.subheader("🤝 Elenco da Partida")
+            st.caption("Selecione uma data acima para ver quem formou o time com ele neste dia:")
+
+            # Cria as opções para o Menu Suspenso (Ex: "15/04/2026 | Time Azul")
+            opcoes_datas = df_historico.apply(
+                lambda x: f"{x['data'].strftime('%d/%m/%Y')} | Time {x['time']} (ID:{x['partida_id']})", axis=1
+            ).tolist()
+
+            if opcoes_datas:
+                escolha_partida = st.selectbox("Escolha a partida:", opcoes_datas, label_visibility="collapsed")
+                
+                # O código extrai o número do ID e a cor do time escolhidos no texto
+                id_escolhido = int(escolha_partida.split("ID:")[1].replace(")", "").strip())
+                time_escolhido = escolha_partida.split(" | Time ")[1].split(" (")[0].strip()
+
+                # Filtra todo o banco de dados buscando apenas quem jogou na mesma data e no mesmo time
+                df_elenco = df_completo[(df_completo['partida_id'] == id_escolhido) & (df_completo['time'] == time_escolhido)].copy()
+                
+                # Ordena para quem fez mais gols e assistências aparecer no topo
+                df_elenco = df_elenco[['jogador', 'gols', 'assistencias']].sort_values(by=['gols', 'assistencias'], ascending=False)
+
+                # Coloca um marcador "(Em foco)" no jogador que você está pesquisando
+                df_elenco['jogador'] = df_elenco['jogador'].apply(lambda x: f"⭐ {x} (Em foco)" if x == jogador_selecionado else x)
+
+                # Exibe a tabela do elenco
+                st.dataframe(
+                    df_elenco,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "jogador": "Atleta",
+                        "gols": "⚽ Gols no dia",
+                        "assistencias": "👟 Assist. no dia"
+                    }
+                )
+    
     st.markdown("---")
     st.header("📜 Histórico Geral de Partidas")
     df_display_partidas = df_partidas.copy()
