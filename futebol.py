@@ -412,47 +412,64 @@ if not df_stats.empty:
                 )
     
             # =========================================================
-            # NOVA FUNCIONALIDADE: MELHORES ENTROSAMENTOS (PARCEIROS)
+            # FUNCIONALIDADE ATUALIZADA: ENTROSAMENTO E TÍTULOS JUNTOS
             # =========================================================
             st.markdown("---")
             st.subheader("👥 Melhores Entrosamentos")
-            st.caption(f"Com quem {jogador_selecionado} mais formou equipe.")
+            st.caption(f"Análise de parceria e vitórias de {jogador_selecionado}.")
 
-            # 1. Pega apenas as partidas e times que o jogador em foco participou
-            partidas_do_jogador = df_jogador[['partida_id', 'time']]
+            # 1. Selecionamos as partidas e times do jogador, incluindo quem foi o campeão
+            partidas_foco = df_jogador[['partida_id', 'time', 'campeao']]
 
-            # 2. Cruza com o banco geral para achar todo mundo que estava lá
-            df_parceiros = pd.merge(df_completo, partidas_do_jogador, on=['partida_id', 'time'])
+            # 2. Cruzamos com o banco geral para encontrar quem estava no mesmo time nessas datas
+            df_parceiros = pd.merge(df_completo, partidas_foco, on=['partida_id', 'time'])
 
-            # 3. Tira o próprio jogador da lista (para ele não aparecer como parceiro dele mesmo)
+            # 3. Removemos o próprio jogador da lista de parceiros
             df_parceiros = df_parceiros[df_parceiros['jogador'] != jogador_selecionado]
 
-            # 4. Conta quantas vezes cada nome aparece
-            contagem_parceiros = df_parceiros['jogador'].value_counts().reset_index()
-            contagem_parceiros.columns = ['Parceiro', 'Jogos Juntos']
+            # 4. Marcamos as vitórias em conjunto (quando o time da dupla foi o campeão)
+            # 'campeao_y' refere-se à coluna vinda do dataframe do jogador selecionado
+            df_parceiros['ganharam_juntos'] = (df_parceiros['time'] == df_parceiros['campeao_y']).astype(int)
 
-            if not contagem_parceiros.empty:
-                # Pega o número máximo de jogos para a barra de progresso calcular a proporção
-                max_jogos = int(contagem_parceiros['Jogos Juntos'].max())
+            # 5. Consolidamos o ranking por parceiro
+            ranking_duplas = df_parceiros.groupby('jogador').agg(
+                total_jogos=('partida_id', 'count'),
+                total_vitorias=('ganharam_juntos', 'sum')
+            ).reset_index()
+
+            ranking_duplas.columns = ['Parceiro', 'Jogos Juntos', 'Títulos Juntos']
+            
+            # Ordenação prioritária por Títulos, depois por quantidade de jogos
+            ranking_duplas = ranking_duplas.sort_values(by=['Títulos Juntos', 'Jogos Juntos'], ascending=False)
+
+            if not ranking_duplas.empty:
+                max_j = int(ranking_duplas['Jogos Juntos'].max())
+                # Define o máximo para a barra de títulos (mínimo de 1 para evitar erro de escala)
+                max_t = int(ranking_duplas['Títulos Juntos'].max()) if ranking_duplas['Títulos Juntos'].max() > 0 else 1
                 
-                # Exibe a tabela elegante com as barras
                 st.dataframe(
-                    contagem_parceiros.head(10), # Mostra o Top 10 de parceiros
+                    ranking_duplas.head(10),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "Parceiro": "Nome do Parceiro",
+                        "Parceiro": "Atleta",
                         "Jogos Juntos": st.column_config.ProgressColumn(
-                            "Partidas no Mesmo Time",
-                            help="Número de vezes que jogaram juntos",
+                            "Partidas no Time",
                             format="%d jogos",
                             min_value=0,
-                            max_value=max_jogos
+                            max_value=max_j
+                        ),
+                        "Títulos Juntos": st.column_config.ProgressColumn(
+                            "Títulos em Dupla",
+                            format="%d 🏆",
+                            min_value=0,
+                            max_value=max_t,
+                            color="orange"
                         )
                     }
                 )
             else:
-                st.info("Nenhuma parceria registrada ainda.")
+                st.info("Ainda não há parcerias registradas para este jogador.")
     
     st.markdown("---")
     st.header("📜 Histórico Geral de Partidas")
