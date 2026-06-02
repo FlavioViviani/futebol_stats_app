@@ -64,12 +64,16 @@ def criar_tabelas():
     except Exception as e:
         print(f"Erro ao criar tabelas: {e}")
 
-criar_tabelas()
-
 # ==========================================
-# 2. CONFIGURAÇÃO DA PÁGINA STREAMLIT
+# 2. CONFIGURAÇÃO E INICIALIZAÇÃO
 # ==========================================
 st.set_page_config(page_title="Stats da Pelada", page_icon="⚽", layout="wide")
+
+# TRAVA DE SEGURANÇA: Só roda a criação de tabelas 1 vez ao abrir o site
+if "setup_banco_concluido" not in st.session_state:
+    criar_tabelas()
+    st.session_state["setup_banco_concluido"] = True
+
 st.title("⚽ Central de Estatísticas da Pelada")
 
 aba_registro, aba_linha, aba_goleiros, aba_perfil = st.tabs([
@@ -173,7 +177,7 @@ with aba_registro:
                 st.error(f"Erro ao salvar: {e}")
 
 # ==========================================
-# 4, 5 e 6. LEITURA DE DADOS (ABRE O BANCO UMA SÓ VEZ)
+# 4, 5 e 6. LEITURA DE DADOS
 # ==========================================
 try:
     conn_read = obter_conexao()
@@ -273,7 +277,6 @@ try:
                         WHERE s1.jogador = %s AND s2.jogador != %s
                         GROUP BY s2.jogador
                     """
-                    # AQUI ESTAVA O ERRO! Agora os dois parâmetros são informados.
                     df_parceiros = pd.read_sql_query(query_parceiros, conn_read, params=(jogador_selecionado, jogador_selecionado))
                     
                     if not df_parceiros.empty:
