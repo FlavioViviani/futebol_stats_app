@@ -15,7 +15,7 @@ def obter_conexao():
 
 def criar_tabelas():
     conn = obter_conexao()
-    conn.autocommit = True # Facilita atualizações na estrutura
+    conn.autocommit = True 
     c = conn.cursor()
     
     # Criação das tabelas base
@@ -53,17 +53,16 @@ def criar_tabelas():
         );
     """)
     
-    # Tenta adicionar a coluna local_jogo caso a tabela partidas seja da versão antiga
     try:
         c.execute("ALTER TABLE partidas ADD COLUMN local_jogo VARCHAR(255);")
     except psycopg2.errors.DuplicateColumn:
-        pass # A coluna já existe, segue o jogo!
+        pass 
     except Exception:
         pass
         
     conn.close()
 
-# Inicializa as tabelas ao rodar o app
+# Inicializa as tabelas
 criar_tabelas()
 
 # ==========================================
@@ -72,11 +71,12 @@ criar_tabelas()
 st.set_page_config(page_title="Stats da Pelada", page_icon="⚽", layout="wide")
 st.title("⚽ Central de Estatísticas da Pelada")
 
-# Criação das abas de navegação no topo
-aba_registro, aba_linha, aba_goleiros = st.tabs([
+# Abas de navegação (Agora com o Perfil do Jogador restaurado!)
+aba_registro, aba_linha, aba_goleiros, aba_perfil = st.tabs([
     "📝 Registrar Partida", 
     "🏃‍♂️ Classificação Linha", 
-    "🧤 Paredões (Goleiros)"
+    "🧤 Paredões (Goleiros)",
+    "👤 Perfil do Jogador"
 ])
 
 # ==========================================
@@ -92,10 +92,9 @@ with aba_registro:
         
         st.markdown("---")
         
-        # --- PREENCHIMENTO DO TIME A ---
+        # --- TIME A ---
         st.subheader("👕 Time A")
-        
-        st.markdown("**🧤 Goleiro (Time A)**")
+        st.markdown("**动作 Goleiro (Time A)**")
         goleiro_a = st.text_input("Nome do Goleiro A", key="goleiro_a_nome")
         col1, col2, col3, col4, col5 = st.columns(5)
         g_a_gols = col1.number_input("Gols (A)", 0, key="g_a_gols")
@@ -112,13 +111,12 @@ with aba_registro:
             gols = col_gol.number_input("Gols", 0, key=f"j_a_gol_{i}")
             asts = col_ast.number_input("Assist.", 0, key=f"j_a_ast_{i}")
             if nome:
-                jogadores_a.append({"nome": nome, "gols":打gols, "assistencias": asts})
+                jogadores_a.append({"nome": nome, "gols": gols, "assistencias": asts})
 
         st.markdown("---")
         
-        # --- PREENCHIMENTO DO TIME B ---
+        # --- TIME B ---
         st.subheader("👕 Time B")
-        
         st.markdown("**🧤 Goleiro (Time B)**")
         goleiro_b = st.text_input("Nome do Goleiro B", key="goleiro_b_nome")
         col6, col7, col8, col9, col10 = st.columns(5)
@@ -138,7 +136,6 @@ with aba_registro:
             if nome:
                 jogadores_b.append({"nome": nome, "gols": gols, "assistencias": asts})
 
-        # --- BOTÃO DE SALVAR ---
         salvar = st.form_submit_button("💾 Registrar Partida na Nuvem", use_container_width=True)
         
         if salvar:
@@ -146,12 +143,10 @@ with aba_registro:
                 conn = obter_conexao()
                 c = conn.cursor()
                 
-                # 1. Salva Partida
                 c.execute("INSERT INTO partidas (data, campeao, local_jogo) VALUES (%s, %s, %s) RETURNING id", 
                           (data_jogo, time_campeao, local_jogo))
                 partida_id = c.fetchone()[0]
                 
-                # 2. Salva Goleiros
                 if goleiro_a.strip():
                     c.execute("""
                         INSERT INTO stats_goleiros (partida_id, goleiro, time, gols, assistencias, gols_sofridos, penaltis, penaltis_defendidos) 
@@ -164,7 +159,6 @@ with aba_registro:
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """, (partida_id, goleiro_b, "Time B", g_b_gols, g_b_ast, g_b_sof, g_b_pen, g_b_def))
                 
-                # 3. Salva Jogadores de Linha
                 for j in jogadores_a:
                     c.execute("INSERT INTO stats_jogadores (partida_id, jogador, time, gols, assistencias) VALUES (%s, %s, %s, %s, %s)",
                               (partida_id, j["nome"], "Time A", j["gols"], j["assistencias"]))
@@ -201,18 +195,10 @@ with aba_linha:
     conn.close()
     
     if not df_linha.empty:
-        # ATUALIZAÇÃO DA FÓRMULA: Média de Participação em Gols = (Gols + Assistências) / Jogos
-        df_linha["Média Participação/Jogo"] = (
-            (df_linha["Gols"] + df_linha["Assistências"]) / df_linha["Jogos"]
-        ).round(2)
-        
-        # Reorganiza as colunas para o visual ficar excelente
+        df_linha["Média Participação/Jogo"] = ((df_linha["Gols"] + df_linha["Assistências"]) / df_linha["Jogos"]).round(2)
         colunas_linha = ["Jogador", "Jogos", "Títulos", "Gols", "Assistências", "Média Participação/Jogo"]
         df_linha = df_linha[colunas_linha]
-        
-        # Ordena o ranking pela Média de Participação (do maior para o menor)
         df_linha = df_linha.sort_values(by="Média Participação/Jogo", ascending=False)
-        
         st.dataframe(df_linha, use_container_width=True, hide_index=True)
     else:
         st.info("Nenhum jogador de linha registrado ainda.")
@@ -244,20 +230,81 @@ with aba_goleiros:
 
     if not df_goleiros.empty:
         df_goleiros["Média Sofridos/Jogo"] = (df_goleiros["Gols Sofridos"] / df_goleiros["Jogos"]).round(2)
-        
-        df_goleiros["% Pên. Defendidos"] = (
-            df_goleiros["Pên. Defendidos"] / df_goleiros["Pênaltis Contra"] * 100
-        ).fillna(0).round(1).astype(str) + "%"
-
+        df_goleiros["% Pên. Defendidos"] = (df_goleiros["Pên. Defendidos"] / df_goleiros["Pênaltis Contra"] * 100).fillna(0).round(1).astype(str) + "%"
         colunas_finais = [
             "Goleiro", "Jogos", "Títulos", "Gols Sofridos", "Média Sofridos/Jogo",
             "Pênaltis Contra", "Pên. Defendidos", "% Pên. Defendidos", 
             "Gols Feitos", "Assistências"
         ]
-        df_goleiros = df_goleiros[colunas_finais]
-
-        df_goleiros = df_goleiros.sort_values(by="Média Sofridos/Jogo", ascending=True)
-
+        df_goleiros = df_goleiros[colunas_finais].sort_values(by="Média Sofridos/Jogo", ascending=True)
         st.dataframe(df_goleiros, use_container_width=True, hide_index=True)
     else:
         st.info("Nenhum goleiro registrado ainda.")
+
+# ==========================================
+# 6. ABA RESTAURADA: PERFIL DETALHADO E PARCEIROS
+# ==========================================
+with aba_perfil:
+    st.header("👤 Perfil Detalhado do Jogador")
+    conn = obter_conexao()
+    
+    # Puxa a lista de atletas cadastrados no banco para criar a caixinha de seleção
+    query_atletas = "SELECT DISTINCT jogador FROM stats_jogadores ORDER BY jogador ASC"
+    df_atletas = pd.read_sql_query(query_atletas, conn)
+    
+    if not df_atletas.empty:
+        jogador_selecionado = st.selectbox("Selecione um atleta para analisar os dados individuais:", df_atletas["jogador"])
+        
+        if jogador_selecionado:
+            col_esq, col_dir = st.columns(2)
+            
+            with col_esq:
+                st.subheader("📅 Histórico de Partidas")
+                query_historico = """
+                    SELECT 
+                        p.data as "Data",
+                        p.local_jogo as "Local",
+                        s.time as "Seu Time",
+                        CASE WHEN s.time = p.campeao THEN '🏆 Campeão' ELSE '➖' END as "Resultado"
+                    FROM stats_jogadores s
+                    JOIN partidas p ON s.partida_id = p.id
+                    WHERE s.jogador = %s
+                    ORDER BY p.data DESC
+                """
+                df_historico = pd.read_sql_query(query_historico, conn, params=[jogador_selecionado])
+                st.dataframe(df_historico, use_container_width=True, hide_index=True)
+                
+            with col_dir:
+                st.subheader("🤝 Melhores Parceiros (Entrosamento)")
+                query_parceiros = """
+                    SELECT 
+                        s2.jogador as "Parceiro", 
+                        COUNT(s2.partida_id) as "Jogos Juntos", 
+                        SUM(CASE WHEN s2.time = p.campeao THEN 1 ELSE 0 END) as "Títulos Juntos"
+                    FROM stats_jogadores s1
+                    JOIN stats_jogadores s2 ON s1.partida_id = s2.partida_id AND s1.time = s2.time
+                    JOIN partidas p ON s1.partida_id = p.id
+                    WHERE s1.jogador = %s AND s2.jogador != %s
+                    GROUP BY s2.jogador
+                """
+                df_parceiros = pd.read_sql_query(query_parceiros, conn, params=[jogador_selecionado])
+                
+                if not df_parceiros.empty:
+                    # Faz o cálculo matemático da porcentagem de vitórias juntos
+                    df_parceiros["% Aproveitamento"] = (
+                        (df_parceiros["Títulos Juntos"] / df_parceiros["Jogos Juntos"]) * 100
+                    ).round(1)
+                    
+                    # Ordena do parceiro com quem ele mais ganhou títulos junto
+                    df_parceiros = df_parceiros.sort_values(by="Títulos Juntos", ascending=False)
+                    
+                    # Formata a coluna adicionando o símbolo de porcentagem
+                    df_parceiros["% Aproveitamento"] = df_parceiros["% Aproveitamento"].astype(str) + "%"
+                    
+                    st.dataframe(df_parceiros, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Este jogador ainda não possui registros jogando no mesmo time com parceiros.")
+    else:
+        st.info("Nenhum dado encontrado para gerar perfis.")
+        
+    conn.close()
